@@ -3,7 +3,6 @@ import { registerDisposer } from "./instance-registry"
 import { ProviderAuthService } from "@/provider/auth-service"
 import { QuestionService } from "@/question/service"
 import { PermissionService } from "@/permission/service"
-import { AuthService } from "@/auth/service"
 import { Instance } from "@/project/instance"
 import type { Project } from "@/project/project"
 
@@ -26,7 +25,7 @@ function lookup(directory: string) {
   return Layer.mergeAll(
     Layer.fresh(QuestionService.layer),
     Layer.fresh(PermissionService.layer),
-    Layer.fresh(ProviderAuthService.layer).pipe(Layer.provide(AuthService.defaultLayer)),
+    Layer.fresh(ProviderAuthService.layer),
   ).pipe(Layer.provide(ctx))
 }
 

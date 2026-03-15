@@ -114,10 +114,11 @@ export const Instance = {
     return await next
   },
   async dispose() {
-    Log.Default.info("disposing instance", { directory: Instance.directory })
-    await Promise.all([State.dispose(Instance.directory), disposeInstance(Instance.directory)])
-    cache.delete(Instance.directory)
-    emit(Instance.directory)
+    const directory = Instance.directory
+    Log.Default.info("disposing instance", { directory })
+    await Promise.all([State.dispose(directory), disposeInstance(directory)])
+    cache.delete(directory)
+    emit(directory)
   },
   async disposeAll() {
     if (disposal.all) return disposal.all

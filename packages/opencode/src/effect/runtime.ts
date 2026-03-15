@@ -6,7 +6,7 @@ import type { InstanceServices } from "@/effect/instances"
 import { Instance } from "@/project/instance"
 
 export const runtime = ManagedRuntime.make(
-  Layer.mergeAll(AccountService.defaultLayer, AuthService.defaultLayer, Instances.layer),
+  Layer.mergeAll(AccountService.defaultLayer, Instances.layer).pipe(Layer.provideMerge(AuthService.defaultLayer)),
 )
 
 export function runPromiseInstance<A, E>(effect: Effect.Effect<A, E, InstanceServices>) {

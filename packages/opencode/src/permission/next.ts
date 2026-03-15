@@ -1,8 +1,7 @@
-import { runtime } from "@/effect/runtime"
+import { runPromiseInstance } from "@/effect/runtime"
 import { Config } from "@/config/config"
 import { fn } from "@/util/fn"
 import { Wildcard } from "@/util/wildcard"
-import { Effect } from "effect"
 import os from "os"
 import * as S from "./service"
 import type {
@@ -21,10 +20,6 @@ export namespace PermissionNext {
     if (pattern.startsWith("$HOME/")) return os.homedir() + pattern.slice(5)
     if (pattern.startsWith("$HOME")) return os.homedir() + pattern.slice(5)
     return pattern
-  }
-
-  function runPromise<A>(f: (service: S.PermissionService.Api) => Effect.Effect<A, PermissionError>) {
-    return runtime.runPromise(S.PermissionService.use(f))
   }
 
   export const Action = S.Action
@@ -66,12 +61,16 @@ export namespace PermissionNext {
     return rulesets.flat()
   }
 
-  export const ask = fn(S.AskInput, async (input) => runPromise((service) => service.ask(input)))
+  export const ask = fn(S.AskInput, async (input) =>
+    runPromiseInstance(S.PermissionService.use((service) => service.ask(input))),
+  )
 
-  export const reply = fn(S.ReplyInput, async (input) => runPromise((service) => service.reply(input)))
+  export const reply = fn(S.ReplyInput, async (input) =>
+    runPromiseInstance(S.PermissionService.use((service) => service.reply(input))),
+  )
 
   export async function list() {
-    return runPromise((service) => service.list())
+    return runPromiseInstance(S.PermissionService.use((service) => service.list()))
   }
 
   export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {

@@ -1223,6 +1223,9 @@ const MIME_BADGE: Record<string, string> = {
   "image/jpeg": "img",
   "image/gif": "img",
   "image/webp": "img",
+  "image/avif": "img",
+  "image/heic": "img",
+  "image/heif": "img",
   "application/pdf": "pdf",
   "application/x-directory": "dir",
 }

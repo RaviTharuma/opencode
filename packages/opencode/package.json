@@ -139,6 +139,9 @@
     "zod": "catalog:",
     "zod-to-json-schema": "3.24.5"
   },
+  "optionalDependencies": {
+    "sharp": ">=0.33.0"
+  },
   "overrides": {
     "drizzle-orm": "1.0.0-beta.16-ea816b6"
   }

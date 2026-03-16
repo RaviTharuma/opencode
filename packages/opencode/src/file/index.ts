@@ -12,6 +12,7 @@ import fuzzysort from "fuzzysort"
 import { Global } from "../global"
 import { git } from "@/util/git"
 import { Protected } from "./protected"
+import { Process } from "../util/process"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -258,6 +259,58 @@ export namespace File {
     ".prettierrc",
     ".eslintrc",
   ])
+
+  // Image formats universally supported by AI provider APIs (Anthropic, OpenAI, Google, etc.)
+  const apiSupportedImageMimes = new Set([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+  ])
+
+  // Formats that need conversion before sending to provider APIs
+  const convertibleImageExtensions = new Set([
+    "avif",
+    "heic",
+    "heif",
+    "jxl",
+    "tif",
+    "tiff",
+    "bmp",
+  ])
+
+  async function convertImageToPng(buffer: Buffer): Promise<Buffer | null> {
+    // Try sharp first (fast, reliable)
+    try {
+      const sharp = (await import("sharp")).default
+      return await sharp(buffer).png().toBuffer()
+    } catch {}
+
+    // Fallback: write to temp file and use system tools
+    const os = await import("os")
+    const tmp = path.join(os.tmpdir(), `opencode-img-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const tmpIn = tmp + ".bin"
+    const tmpOut = tmp + ".png"
+    try {
+      await fs.promises.writeFile(tmpIn, buffer)
+
+      if (process.platform === "darwin") {
+        // macOS: use sips (always available)
+        const result = await Process.run(["sips", "-s", "format", "png", tmpIn, "--out", tmpOut], { nothrow: true })
+        if (result.code === 0) return await fs.promises.readFile(tmpOut)
+      }
+
+      // Cross-platform: try ffmpeg
+      const result = await Process.run(["ffmpeg", "-y", "-i", tmpIn, tmpOut], { nothrow: true })
+      if (result.code === 0) return await fs.promises.readFile(tmpOut)
+    } catch {
+    } finally {
+      fs.promises.unlink(tmpIn).catch(() => {})
+      fs.promises.unlink(tmpOut).catch(() => {})
+    }
+
+    return null
+  }
 
   function isImageByExtension(filepath: string): boolean {
     const ext = path.extname(filepath).toLowerCase().slice(1)
@@ -509,9 +562,23 @@ export namespace File {
     // Fast path: check extension before any filesystem operations
     if (isImageByExtension(file)) {
       if (await Filesystem.exists(full)) {
-        const buffer = await Filesystem.readBytes(full).catch(() => Buffer.from([]))
+        let buffer = await Filesystem.readBytes(full).catch(() => Buffer.from([]))
+        let mimeType = getImageMimeType(file)
+        const ext = path.extname(file).toLowerCase().slice(1)
+
+        // Auto-convert unsupported image formats (avif, heic, etc.) to PNG
+        if (convertibleImageExtensions.has(ext) && !apiSupportedImageMimes.has(mimeType)) {
+          const converted = await convertImageToPng(buffer)
+          if (converted) {
+            buffer = converted
+            mimeType = "image/png"
+            log.info("converted image to png", { file, originalFormat: ext })
+          } else {
+            log.warn("failed to convert image, sending as-is", { file, format: ext })
+          }
+        }
+
         const content = buffer.toString("base64")
-        const mimeType = getImageMimeType(file)
         return { type: "text", content, mimeType, encoding: "base64" }
       }
       return { type: "text", content: "" }

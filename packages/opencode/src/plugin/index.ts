@@ -19,6 +19,21 @@ import { makeRunPromise } from "@/effect/run-service"
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
 
+  // Intercept global console to prevent plugins from corrupting TUI output.
+  // Plugin console.log/warn/error calls are routed through the structured
+  // Log system, respecting the configured logLevel.
+  const pluginConsole = Log.create({ service: "plugin:console" })
+
+  function interceptConsole() {
+    const format = (...args: unknown[]) =>
+      args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")
+    console.log = (...args: unknown[]) => pluginConsole.info(format(...args))
+    console.info = (...args: unknown[]) => pluginConsole.info(format(...args))
+    console.warn = (...args: unknown[]) => pluginConsole.warn(format(...args))
+    console.error = (...args: unknown[]) => pluginConsole.error(format(...args))
+    console.debug = (...args: unknown[]) => pluginConsole.debug(format(...args))
+  }
+
   type State = {
     hooks: Hooks[]
   }
@@ -79,6 +94,9 @@ export namespace Plugin {
               },
               $: Bun.$,
             }
+
+            // Intercept console before loading any plugins to prevent TUI corruption
+            interceptConsole()
 
             for (const plugin of INTERNAL_PLUGINS) {
               log.info("loading internal plugin", { name: plugin.name })

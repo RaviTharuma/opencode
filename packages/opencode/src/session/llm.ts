@@ -17,6 +17,7 @@ import { Flag } from "@/flag/flag"
 import { Permission } from "@/permission"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
+import { Unicode } from "@/util/unicode"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -125,9 +126,15 @@ export namespace LLM {
       system.length = 0
       system.push(header, rest.join("\n"))
     }
+    const sanitizedSystem = system.map(Unicode.toWellFormedString)
 
-    const variant =
-      !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}
+    const variant: Record<string, any> =
+      !input.small && input.model.variants && input.user.variant
+        ? mergeDeep({}, input.model.variants[input.user.variant])
+        : {}
+    if (provider.id === "anthropic" && variant.effort === "max") {
+      variant.effort = "high"
+    }
     const base = input.small
       ? ProviderTransform.smallOptions(input.model)
       : ProviderTransform.options({
@@ -142,22 +149,22 @@ export namespace LLM {
       mergeDeep(variant),
     )
     if (isOpenaiOauth) {
-      options.instructions = system.join("\n")
+      options.instructions = sanitizedSystem.join("\n")
     }
 
     const isWorkflow = language instanceof GitLabWorkflowLanguageModel
     const messages = isOpenaiOauth
-      ? input.messages
+      ? Unicode.sanitizeJSON(input.messages)
       : isWorkflow
-        ? input.messages
+        ? Unicode.sanitizeJSON(input.messages)
         : [
-            ...system.map(
+            ...sanitizedSystem.map(
               (x): ModelMessage => ({
                 role: "system",
                 content: x,
               }),
             ),
-            ...input.messages,
+            ...Unicode.sanitizeJSON(input.messages),
           ]
 
     const params = await Plugin.trigger(
@@ -287,13 +294,13 @@ export namespace LLM {
       temperature: params.temperature,
       topP: params.topP,
       topK: params.topK,
-      providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+      providerOptions: Unicode.sanitizeJSON(ProviderTransform.providerOptions(input.model, params.options)),
       activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
       tools,
       toolChoice: input.toolChoice,
       maxOutputTokens,
       abortSignal: input.abort,
-      headers: {
+      headers: Unicode.sanitizeJSON({
         ...(input.model.providerID.startsWith("opencode")
           ? {
               "x-opencode-project": Instance.project.id,
@@ -308,7 +315,7 @@ export namespace LLM {
             }),
         ...input.model.headers,
         ...headers,
-      },
+      }),
       maxRetries: input.retries ?? 0,
       messages,
       model: wrapLanguageModel({

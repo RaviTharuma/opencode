@@ -106,6 +106,7 @@ describe("session.llm.hasToolCalls", () => {
 type Capture = {
   url: URL
   headers: Headers
+  rawBody: string
   body: Record<string, unknown>
 }
 
@@ -194,8 +195,9 @@ beforeAll(() => {
       }
 
       const url = new URL(req.url)
-      const body = (await req.json()) as Record<string, unknown>
-      next.resolve({ url, headers: req.headers, body })
+      const rawBody = await req.text()
+      const body = (rawBody ? JSON.parse(rawBody) : {}) as Record<string, unknown>
+      next.resolve({ url, headers: req.headers, rawBody, body })
 
       if (!url.pathname.endsWith(next.path)) {
         return new Response("not found", { status: 404 })
@@ -989,6 +991,187 @@ describe("session.llm.stream", () => {
         expect(body.max_tokens).toBe(ProviderTransform.maxOutputTokens(resolved))
         expect(body.temperature).toBe(0.4)
         expect(body.top_p).toBe(0.9)
+      },
+    })
+  })
+
+  test("sanitizes lone surrogates in anthropic system prompts", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const providerID = "anthropic"
+    const modelID = "claude-3-5-sonnet-20241022"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+    const loneHigh = String.fromCharCode(0xd800)
+
+    const chunks = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg-sanitize-1",
+          model: model.id,
+          usage: {
+            input_tokens: 3,
+            cache_creation_input_tokens: null,
+            cache_read_input_tokens: null,
+          },
+        },
+      },
+      { type: "message_stop" },
+    ]
+    const request = waitRequest("/messages", createEventResponse(chunks))
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-anthropic-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await Provider.getModel(ProviderID.make(providerID), ModelID.make(model.id))
+        const sessionID = SessionID.make("session-test-surrogate")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        const user = {
+          id: MessageID.make("user-surrogate"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make(providerID), modelID: resolved.id },
+          system: `memorix ${loneHigh} context`,
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: [`system ${loneHigh} instruction`],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        const capture = await request
+        expect(capture.rawBody.includes("\\ud800")).toBe(false)
+      },
+    })
+  })
+
+  test("clamps anthropic max effort to high", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const providerID = "anthropic"
+    const modelID = "claude-3-7-sonnet-20250219"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+
+    const chunks = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg-effort-1",
+          model: model.id,
+          usage: {
+            input_tokens: 3,
+            cache_creation_input_tokens: null,
+            cache_read_input_tokens: null,
+          },
+        },
+      },
+      { type: "message_stop" },
+    ]
+    const request = waitRequest("/messages", createEventResponse(chunks))
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-anthropic-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await Provider.getModel(ProviderID.make(providerID), ModelID.make(model.id))
+        const sessionID = SessionID.make("session-test-effort")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        const user = {
+          id: MessageID.make("user-effort"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make(providerID), modelID: resolved.id },
+          variant: "max",
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        const capture = await request
+        expect(capture.rawBody.includes('"effort":"max"')).toBe(false)
       },
     })
   })

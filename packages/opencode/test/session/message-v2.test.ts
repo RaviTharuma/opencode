@@ -570,6 +570,116 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("sanitizes lone surrogates before building model messages", () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+    const loneHigh = String.fromCharCode(0xd800)
+    const loneLow = String.fromCharCode(0xdc00)
+    const replacement = String.fromCharCode(0xfffd)
+    const validPair = "\ud83d\ude00"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: `user ${loneHigh} text ${validPair}`,
+          },
+        ] as MessageV2.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "text",
+            text: `assistant ${loneLow} text`,
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "reasoning",
+            text: `reasoning ${loneHigh} text`,
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a3"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: `echo ${loneLow}` },
+              output: `output ${loneHigh} text`,
+              title: "Bash",
+              metadata: {},
+              time: { start: 0, end: 1 },
+            },
+          },
+          {
+            ...basePart(assistantID, "a4"),
+            type: "tool",
+            callID: "call-2",
+            tool: "read",
+            state: {
+              status: "error",
+              input: { path: `/tmp/${loneHigh}` },
+              error: `error ${loneLow} text`,
+              metadata: {},
+              time: { start: 1, end: 2 },
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: `user ${replacement} text ${validPair}` }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `assistant ${replacement} text` },
+          { type: "reasoning", text: `reasoning ${replacement} text`, providerOptions: undefined },
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "bash",
+            input: { cmd: `echo ${replacement}` },
+            providerExecuted: undefined,
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call-2",
+            toolName: "read",
+            input: { path: `/tmp/${replacement}` },
+            providerExecuted: undefined,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "bash",
+            output: { type: "text", value: `output ${replacement} text` },
+          },
+          {
+            type: "tool-result",
+            toolCallId: "call-2",
+            toolName: "read",
+            output: { type: "error-text", value: `error ${replacement} text` },
+          },
+        ],
+      },
+    ])
+  })
+
   test("filters assistant messages with non-abort errors", async () => {
     const assistantID = "m-assistant"
 

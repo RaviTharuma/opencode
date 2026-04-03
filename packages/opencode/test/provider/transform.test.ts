@@ -575,6 +575,120 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
 
     expect(result.properties.spreadsheetData.properties.rows.items.items.type).toBe("string")
   })
+
+  test("adds object type when array items define properties", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        migrations: {
+          type: "array",
+          items: {
+            properties: {
+              name: { type: "string" },
+            },
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.properties.migrations.items.type).toBe("object")
+    expect(result.properties.migrations.items.properties.name.type).toBe("string")
+  })
+
+  test("adds array type when schema defines items without type", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        migrations: {
+          items: {
+            properties: {
+              name: { type: "string" },
+            },
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.properties.migrations.type).toBe("array")
+    expect(result.properties.migrations.items.type).toBe("object")
+  })
+
+  test("removes $schema and additionalProperties for gemini", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        topic: { type: "string" },
+      },
+      required: ["topic"],
+      additionalProperties: false,
+      $schema: "http://json-schema.org/draft-07/schema#",
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.$schema).toBeUndefined()
+    expect(result.additionalProperties).toBeUndefined()
+    expect(result.required).toEqual(["topic"])
+  })
+
+  test("strips unsupported json-schema fields for gemini", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        user_id: {
+          type: "string",
+          format: "uuid",
+          default: "x",
+          minLength: 1,
+        },
+        link: {
+          type: ["object", "null"],
+          properties: {
+            href: { type: "string" },
+          },
+        },
+      },
+      additionalProperties: false,
+      $defs: {
+        nested: {
+          type: "object",
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.$defs).toBeUndefined()
+    expect(result.additionalProperties).toBeUndefined()
+    expect(result.properties.user_id.format).toBeUndefined()
+    expect(result.properties.user_id.default).toBeUndefined()
+    expect(result.properties.user_id.minLength).toBeUndefined()
+    expect(result.properties.link.type).toBe("object")
+    expect(result.properties.link.nullable).toBe(true)
+  })
+
+  test("collapses oneOf for gemini", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        parent: {
+          oneOf: [
+            { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
+            { type: "object", properties: { database_id: { type: "string" } }, required: ["database_id"] },
+          ],
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.properties.parent.type).toBe("object")
+    expect(result.properties.parent.properties.page_id.type).toBe("string")
+  })
 })
 
 describe("ProviderTransform.schema - gemini combiner nodes", () => {
@@ -597,7 +711,7 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
     Object.entries(node).forEach(([key, value]) => walk(value, cb, [...path, key]))
   }
 
-  test("keeps edits.items.anyOf without adding type", () => {
+  test("collapses edits.items.anyOf to a concrete schema", () => {
     const schema = {
       type: "object",
       properties: {
@@ -631,8 +745,59 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
 
     const result = ProviderTransform.schema(geminiModel, schema) as any
 
-    expect(Array.isArray(result.properties.edits.items.anyOf)).toBe(true)
-    expect(result.properties.edits.items.type).toBeUndefined()
+    expect(result.properties.edits.items.type).toBe("object")
+    expect(result.properties.edits.items.properties.old_string.type).toBe("string")
+    expect(result.properties.edits.items.properties.new_string.type).toBe("string")
+  })
+
+  test("does not inject type into properties maps", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        properties: {
+          properties: {
+            fillColor: {
+              type: "array",
+              items: {
+                properties: {
+                  from: { type: "string" },
+                  to: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.properties.type).toBeUndefined()
+    expect(result.properties.properties.type).toBe("object")
+    expect(result.properties.properties.properties.type).toBeUndefined()
+    expect(result.properties.properties.properties.fillColor.type).toBe("array")
+  })
+
+  test("removes stray items from object schemas", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        migrations: {
+          type: "object",
+          items: {
+            type: "object",
+            properties: {
+              new_tag: { type: "string" },
+            },
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+
+    expect(result.properties.migrations.type).toBe("object")
+    expect(result.properties.migrations.items).toBeUndefined()
   })
 
   test("does not add sibling keys to combiner nodes during sanitize", () => {

@@ -3,6 +3,7 @@ import { Hono } from "hono"
 import { proxy } from "hono/proxy"
 import z from "zod"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { Log } from "../util/log"
 import { Format } from "../format"
 import { TuiRoutes } from "./routes/tui"
@@ -26,6 +27,7 @@ import { ExperimentalRoutes } from "./routes/experimental"
 import { ProviderRoutes } from "./routes/provider"
 import { EventRoutes } from "./routes/event"
 import { errorHandler } from "./middleware"
+import { Filesystem } from "@/util/filesystem"
 
 const log = Log.create({ service: "server" })
 
@@ -39,6 +41,12 @@ const DEFAULT_CSP =
 
 const csp = (hash = "") =>
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:`
+
+const webroot = () => {
+  const env = process.env.OPENCODE_WEB_DIST
+  if (env) return env
+  return path.resolve(path.dirname(process.execPath), "../../../../app/dist")
+}
 
 export const InstanceRoutes = (app?: Hono) =>
   (app ?? new Hono())
@@ -249,11 +257,41 @@ export const InstanceRoutes = (app?: Hono) =>
       },
     )
     .all("/*", async (c) => {
+      const root = webroot()
+      if (await Filesystem.exists(root)) {
+        const req = c.req.path === "/" ? "/index.html" : c.req.path
+        const file = path.resolve(root, "." + req)
+        const safe = file === root || file.startsWith(root + path.sep)
+        if (!safe) return c.text("Not found", 404)
+
+        const html = path.join(root, "index.html")
+        const hit = await Filesystem.exists(file)
+        const spa = !path.extname(c.req.path)
+        const target = hit ? file : spa ? html : undefined
+        if (!target) return c.text("Not found", 404)
+
+        const body = Bun.file(target)
+        const type = body.type || (target.endsWith(".html") ? "text/html; charset=utf-8" : "")
+        const headers = new Headers(type ? { "Content-Type": type } : undefined)
+
+        if (target.endsWith(".html")) {
+          const text = await body.text()
+          const match = text.match(
+            /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(['"])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
+          )
+          const hash = match ? createHash("sha256").update(match[2]).digest("base64") : ""
+          headers.set("Content-Security-Policy", csp(hash))
+          return new Response(text, { headers })
+        }
+
+        return new Response(body, { headers })
+      }
+
       const embeddedWebUI = await embeddedUIPromise
-      const path = c.req.path
+      const reqPath = c.req.path
 
       if (embeddedWebUI) {
-        const match = embeddedWebUI[path.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
+        const match = embeddedWebUI[reqPath.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
         if (!match) return c.json({ error: "Not Found" }, 404)
         const file = Bun.file(match)
         if (await file.exists()) {
@@ -266,7 +304,7 @@ export const InstanceRoutes = (app?: Hono) =>
           return c.json({ error: "Not Found" }, 404)
         }
       } else {
-        const response = await proxy(`https://app.opencode.ai${path}`, {
+        const response = await proxy(`https://app.opencode.ai${reqPath}`, {
           ...c.req,
           headers: {
             ...c.req.raw.headers,

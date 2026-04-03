@@ -11,6 +11,7 @@ import { MessageTable, PartTable, SessionTable } from "./session.sql"
 import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
+import { Unicode } from "@/util/unicode"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -604,7 +605,7 @@ export namespace MessageV2 {
     const toModelOutput = (options: { toolCallId: string; input: unknown; output: unknown }) => {
       const output = options.output
       if (typeof output === "string") {
-        return { type: "text", value: output }
+        return { type: "text", value: Unicode.toWellFormedString(output) }
       }
 
       if (typeof output === "object") {
@@ -619,20 +620,22 @@ export namespace MessageV2 {
         return {
           type: "content",
           value: [
-            { type: "text", text: outputObject.text },
+            { type: "text", text: Unicode.toWellFormedString(outputObject.text ?? "") },
             ...attachments.map((attachment) => ({
               type: "media",
-              mediaType: attachment.mime,
+              mediaType: Unicode.toWellFormedString(attachment.mime),
               data: iife(() => {
                 const commaIndex = attachment.url.indexOf(",")
-                return commaIndex === -1 ? attachment.url : attachment.url.slice(commaIndex + 1)
+                return Unicode.toWellFormedString(
+                  commaIndex === -1 ? attachment.url : attachment.url.slice(commaIndex + 1),
+                )
               }),
             })),
           ],
         }
       }
 
-      return { type: "json", value: output as never }
+      return { type: "json", value: Unicode.sanitizeJSON(output) as never }
     }
 
     for (const msg of input) {
@@ -649,7 +652,7 @@ export namespace MessageV2 {
           if (part.type === "text" && !part.ignored)
             userMessage.parts.push({
               type: "text",
-              text: part.text,
+              text: Unicode.toWellFormedString(part.text),
             })
           // text/plain and directory files are converted into text parts, ignore them
           if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
@@ -661,9 +664,9 @@ export namespace MessageV2 {
             } else {
               userMessage.parts.push({
                 type: "file",
-                url: part.url,
-                mediaType: part.mime,
-                filename: part.filename,
+                url: Unicode.toWellFormedString(part.url),
+                mediaType: Unicode.toWellFormedString(part.mime),
+                filename: part.filename ? Unicode.toWellFormedString(part.filename) : undefined,
               })
             }
           }
@@ -705,7 +708,7 @@ export namespace MessageV2 {
           if (part.type === "text")
             assistantMessage.parts.push({
               type: "text",
-              text: part.text,
+              text: Unicode.toWellFormedString(part.text),
               ...(differentModel ? {} : { providerMetadata: part.metadata }),
             })
           if (part.type === "step-start")
@@ -713,7 +716,9 @@ export namespace MessageV2 {
               type: "step-start",
             })
           if (part.type === "tool") {
-            toolNames.add(part.tool)
+            const toolName = Unicode.toWellFormedString(part.tool)
+            const toolCallID = Unicode.toWellFormedString(part.callID)
+            toolNames.add(toolName)
             if (part.state.status === "completed") {
               const outputText = part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output
               const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
@@ -736,31 +741,31 @@ export namespace MessageV2 {
                   : outputText
 
               assistantMessage.parts.push({
-                type: ("tool-" + part.tool) as `tool-${string}`,
+                type: ("tool-" + toolName) as `tool-${string}`,
                 state: "output-available",
-                toolCallId: part.callID,
-                input: part.state.input,
+                toolCallId: toolCallID,
+                input: Unicode.sanitizeJSON(part.state.input),
                 output,
                 ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
               })
             }
             if (part.state.status === "error")
               assistantMessage.parts.push({
-                type: ("tool-" + part.tool) as `tool-${string}`,
+                type: ("tool-" + toolName) as `tool-${string}`,
                 state: "output-error",
-                toolCallId: part.callID,
-                input: part.state.input,
-                errorText: part.state.error,
+                toolCallId: toolCallID,
+                input: Unicode.sanitizeJSON(part.state.input),
+                errorText: Unicode.toWellFormedString(part.state.error),
                 ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
               })
             // Handle pending/running tool calls to prevent dangling tool_use blocks
             // Anthropic/Claude APIs require every tool_use to have a corresponding tool_result
             if (part.state.status === "pending" || part.state.status === "running")
               assistantMessage.parts.push({
-                type: ("tool-" + part.tool) as `tool-${string}`,
+                type: ("tool-" + toolName) as `tool-${string}`,
                 state: "output-error",
-                toolCallId: part.callID,
-                input: part.state.input,
+                toolCallId: toolCallID,
+                input: Unicode.sanitizeJSON(part.state.input),
                 errorText: "[Tool execution was interrupted]",
                 ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
               })
@@ -768,7 +773,7 @@ export namespace MessageV2 {
           if (part.type === "reasoning") {
             assistantMessage.parts.push({
               type: "reasoning",
-              text: part.text,
+              text: Unicode.toWellFormedString(part.text),
               ...(differentModel ? {} : { providerMetadata: part.metadata }),
             })
           }
@@ -788,8 +793,8 @@ export namespace MessageV2 {
                 },
                 ...media.map((attachment) => ({
                   type: "file" as const,
-                  url: attachment.url,
-                  mediaType: attachment.mime,
+                  url: Unicode.toWellFormedString(attachment.url),
+                  mediaType: Unicode.toWellFormedString(attachment.mime),
                 })),
               ],
             })

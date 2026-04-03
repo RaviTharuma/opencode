@@ -998,8 +998,52 @@ export namespace ProviderTransform {
           return obj.map(sanitizeGemini)
         }
 
+        const looksLikeSchemaMap =
+          !hasSchemaIntent(obj) && Object.values(obj).some((value) => isPlainObject(value) && hasSchemaIntent(value))
+        if (looksLikeSchemaMap) {
+          return Object.fromEntries(Object.entries(obj).map(([key, value]) => [key, sanitizeGemini(value)]))
+        }
+
         const result: any = {}
         for (const [key, value] of Object.entries(obj)) {
+          if (key === "properties" && isPlainObject(value)) {
+            result[key] = Object.fromEntries(Object.entries(value).map(([name, schema]) => [name, sanitizeGemini(schema)]))
+            continue
+          }
+          if (key === "patternProperties" && isPlainObject(value)) {
+            result[key] = Object.fromEntries(Object.entries(value).map(([name, schema]) => [name, sanitizeGemini(schema)]))
+            continue
+          }
+          if (
+            [
+              "$schema",
+              "$defs",
+              "$ref",
+              "default",
+              "format",
+              "const",
+              "minLength",
+              "maxLength",
+              "minimum",
+              "maximum",
+              "pattern",
+              "examples",
+              "example",
+              "title",
+            ].includes(key)
+          ) {
+            continue
+          }
+          if (["oneOf", "anyOf", "allOf"].includes(key) && Array.isArray(value)) {
+            const pick = value.find((item) => isPlainObject(item) && (item.type || item.properties || item.items))
+            if (pick) {
+              const next = sanitizeGemini(pick)
+              if (isPlainObject(next)) {
+                Object.assign(result, next)
+              }
+            }
+            continue
+          }
           if (key === "enum" && Array.isArray(value)) {
             // Convert all enum values to strings
             result[key] = value.map((v) => String(v))
@@ -1007,12 +1051,28 @@ export namespace ProviderTransform {
             if (result.type === "integer" || result.type === "number") {
               result.type = "string"
             }
+          } else if (key === "type" && Array.isArray(value)) {
+            const next = value.map(String)
+            const primary = next.find((item) => item !== "null")
+            if (primary) result.type = primary
+            if (next.includes("null")) result.nullable = true
           } else if (typeof value === "object" && value !== null) {
             result[key] = sanitizeGemini(value)
           } else {
             result[key] = value
           }
         }
+
+        if (!result.type && !hasCombiner(result)) {
+          if (isPlainObject(result.properties) || Array.isArray(result.required)) {
+            result.type = "object"
+          }
+          if (!result.type && (result.items !== undefined || result.prefixItems !== undefined)) {
+            result.type = "array"
+          }
+        }
+
+        delete result.additionalProperties
 
         // Filter required array to only include fields that exist in properties
         if (result.type === "object" && result.properties && Array.isArray(result.required)) {
@@ -1023,9 +1083,16 @@ export namespace ProviderTransform {
           if (result.items == null) {
             result.items = {}
           }
-          // Ensure items has a type only when it's still schema-empty.
-          if (isPlainObject(result.items) && !hasSchemaIntent(result.items)) {
-            result.items.type = "string"
+          if (isPlainObject(result.items)) {
+            // Gemini rejects array items that define object fields without an
+            // explicit object type (for example items.properties + no items.type).
+            if (!("type" in result.items) && isPlainObject(result.items.properties)) {
+              result.items.type = "object"
+            }
+            // Ensure items has a type only when it's still schema-empty.
+            if (!hasSchemaIntent(result.items)) {
+              result.items.type = "string"
+            }
           }
         }
 
@@ -1033,6 +1100,14 @@ export namespace ProviderTransform {
         if (result.type && result.type !== "object" && !hasCombiner(result)) {
           delete result.properties
           delete result.required
+        }
+
+        // Remove items/prefixItems from non-array types. Some MCP schemas
+        // incorrectly carry object field definitions under `items` even when
+        // the schema itself is an object (for example `migrations` payloads).
+        if (result.type && result.type !== "array" && !hasCombiner(result)) {
+          delete result.items
+          delete result.prefixItems
         }
 
         return result

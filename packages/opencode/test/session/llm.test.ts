@@ -204,7 +204,7 @@ beforeAll(() => {
       }
 
       return typeof next.response === "function"
-        ? next.response(req, { url, headers: req.headers, body })
+        ? next.response(req, { url, headers: req.headers, rawBody, body })
         : next.response
     },
   })

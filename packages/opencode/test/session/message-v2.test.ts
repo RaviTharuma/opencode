@@ -570,7 +570,7 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
-  test("sanitizes lone surrogates before building model messages", () => {
+  test("sanitizes lone surrogates before building model messages", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"
     const loneHigh = String.fromCharCode(0xd800)

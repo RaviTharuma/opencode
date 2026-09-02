@@ -9,8 +9,19 @@ import { isImageAttachment } from "@/util/media"
 
 export const DEFAULT_MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
 
+function parsePositiveIntEnv(raw: string | undefined) {
+  if (raw == null || raw === "") return undefined
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== raw.trim()) return undefined
+  return parsed
+}
+
 export function resolveMaxResponseSize(config?: { webfetch?: { max_response_size?: number } }) {
-  return config?.webfetch?.max_response_size ?? DEFAULT_MAX_RESPONSE_SIZE
+  // Prefer config when set, then OPENCODE_WEBFETCH_MAX_SIZE, then default 5MB.
+  if (config?.webfetch?.max_response_size != null) {
+    return config.webfetch.max_response_size
+  }
+  return parsePositiveIntEnv(process.env["OPENCODE_WEBFETCH_MAX_SIZE"]) ?? DEFAULT_MAX_RESPONSE_SIZE
 }
 
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds

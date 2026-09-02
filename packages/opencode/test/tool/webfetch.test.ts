@@ -119,12 +119,54 @@ describe("tool.webfetch", () => {
 })
 
 describe("resolveMaxResponseSize", () => {
+  const envKey = "OPENCODE_WEBFETCH_MAX_SIZE"
+
   test("defaults to 5MB", () => {
-    expect(resolveMaxResponseSize()).toBe(DEFAULT_MAX_RESPONSE_SIZE)
-    expect(resolveMaxResponseSize({})).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+    const prev = process.env[envKey]
+    delete process.env[envKey]
+    try {
+      expect(resolveMaxResponseSize()).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+      expect(resolveMaxResponseSize({})).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+    } finally {
+      if (prev === undefined) delete process.env[envKey]
+      else process.env[envKey] = prev
+    }
   })
 
   test("uses configured max_response_size", () => {
-    expect(resolveMaxResponseSize({ webfetch: { max_response_size: 1024 } })).toBe(1024)
+    const prev = process.env[envKey]
+    process.env[envKey] = "4096"
+    try {
+      expect(resolveMaxResponseSize({ webfetch: { max_response_size: 1024 } })).toBe(1024)
+    } finally {
+      if (prev === undefined) delete process.env[envKey]
+      else process.env[envKey] = prev
+    }
+  })
+
+  test("falls back to OPENCODE_WEBFETCH_MAX_SIZE when config unset", () => {
+    const prev = process.env[envKey]
+    process.env[envKey] = "20971520"
+    try {
+      expect(resolveMaxResponseSize()).toBe(20971520)
+      expect(resolveMaxResponseSize({})).toBe(20971520)
+      expect(resolveMaxResponseSize({ webfetch: {} })).toBe(20971520)
+    } finally {
+      if (prev === undefined) delete process.env[envKey]
+      else process.env[envKey] = prev
+    }
+  })
+
+  test("ignores invalid OPENCODE_WEBFETCH_MAX_SIZE values", () => {
+    const prev = process.env[envKey]
+    try {
+      for (const invalid of ["", "0", "-1", "1.5", "abc", "1024abc"]) {
+        process.env[envKey] = invalid
+        expect(resolveMaxResponseSize()).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+      }
+    } finally {
+      if (prev === undefined) delete process.env[envKey]
+      else process.env[envKey] = prev
+    }
   })
 })

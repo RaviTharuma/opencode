@@ -1,4 +1,5 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
+import { Config } from "@/config/config"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import * as Tool from "./tool"
@@ -6,7 +7,12 @@ import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
 
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+export const DEFAULT_MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+
+export function resolveMaxResponseSize(config?: { webfetch?: { max_response_size?: number } }) {
+  return config?.webfetch?.max_response_size ?? DEFAULT_MAX_RESPONSE_SIZE
+}
+
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
 const MAX_TIMEOUT = 120 * 1000 // 2 minutes
 
@@ -46,6 +52,12 @@ export const WebFetchTool = Tool.define(
               timeout: params.timeout,
             },
           })
+
+          const configSvc = yield* Effect.serviceOption(Config.Service)
+          const cfg = Option.isNone(configSvc)
+            ? undefined
+            : yield* configSvc.value.get().pipe(Effect.catch(() => Effect.succeed(undefined)))
+          const maxResponseSize = resolveMaxResponseSize(cfg)
 
           const timeout = Math.min((params.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000, MAX_TIMEOUT)
 
@@ -94,13 +106,13 @@ export const WebFetchTool = Tool.define(
 
           // Check content length
           const contentLength = response.headers["content-length"]
-          if (contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
+          if (contentLength && parseInt(contentLength) > maxResponseSize) {
+            throw new Error("Response too large (exceeds configured size limit)")
           }
 
           const arrayBuffer = yield* response.arrayBuffer
-          if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
+          if (arrayBuffer.byteLength > maxResponseSize) {
+            throw new Error("Response too large (exceeds configured size limit)")
           }
 
           const contentType = response.headers["content-type"] || ""

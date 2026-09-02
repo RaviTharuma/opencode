@@ -1,11 +1,11 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
-import { WebFetchTool } from "../../src/tool/webfetch"
+import { DEFAULT_MAX_RESPONSE_SIZE, resolveMaxResponseSize, WebFetchTool } from "../../src/tool/webfetch"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { testEffect } from "../lib/effect"
@@ -116,4 +116,15 @@ describe("tool.webfetch", () => {
         }),
     ),
   )
+})
+
+describe("resolveMaxResponseSize", () => {
+  test("defaults to 5MB", () => {
+    expect(resolveMaxResponseSize()).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+    expect(resolveMaxResponseSize({})).toBe(DEFAULT_MAX_RESPONSE_SIZE)
+  })
+
+  test("uses configured max_response_size", () => {
+    expect(resolveMaxResponseSize({ webfetch: { max_response_size: 1024 } })).toBe(1024)
+  })
 })
